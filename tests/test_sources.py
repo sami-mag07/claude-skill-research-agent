@@ -3,7 +3,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import importlib.util
 import unittest
+from pathlib import Path
 
 CLI = os.path.join(os.path.dirname(__file__), "..", "skills", "research-agent", "references", "sources.py")
 
@@ -66,6 +68,26 @@ class Ledger(unittest.TestCase):
 
     def test_draft_without_citations_fails(self):
         self.assertNotEqual(self.run_cli("verify", self.draft("No sources at all.")).returncode, 0)
+
+
+class ParseId(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = Path(__file__).parents[1] / "skills" / "research-agent" / "references" / "sources.py"
+        spec = importlib.util.spec_from_file_location("research_sources", path)
+        cls.sources = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sources)
+
+    def test_parse_id_canonicalises_bracketed_and_zero_padded_values(self):
+        self.assertEqual(self.sources.parse_id("[s01]"), "1")
+        self.assertEqual(self.sources.parse_id("00042"), "42")
+        self.assertEqual(self.sources.parse_id(0), "0")
+
+    def test_parse_id_rejects_values_without_digits(self):
+        for raw in ("", "source", None, []):
+            with self.subTest(raw=raw):
+                with self.assertRaises(SystemExit):
+                    self.sources.parse_id(raw)
 
 
 if __name__ == "__main__":
