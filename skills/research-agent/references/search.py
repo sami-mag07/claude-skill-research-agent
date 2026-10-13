@@ -223,38 +223,29 @@ def s_hound(q, o, keys):
                 "hound") for x in r.get("results", [])]
 
 
-def _mcporter(tool, args, output):
-    try:
-        p = subprocess.run(["mcporter", "call", tool, "--args", json.dumps(args),
-                            "--output", output], cwd=os.path.expanduser("~"),
-                           capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        raise EngineDown(type(e).__name__)
-    if p.returncode != 0:
-        raise EngineDown((p.stderr or p.stdout).strip()[:120] or "Fehler")
-    return p.stdout
+DONSETCH_BIN = os.environ.get(
+    "DONSETCH_BIN", os.path.expanduser("~/.local/share/donsetch/4.4.1/donsetch"))
 
 
 def s_donsetch(q, o, keys):
-    """Keyless Metasuche über DonSeTch (gepinnt 4.4.1, stdio über mcporter).
+    """Keyless Metasuche über DonSeTch (gepinnt 4.4.1, Binary direkt).
     Kann keine Domain-/Zeitfilter, darum stehen site:/Jahr im Suchtext und
-    host_ok filtert danach. Text liefert Titel, JSON die URLs (2. Aufruf cached)."""
+    host_ok filtert danach. Ein einziger `search --json`-Aufruf liefert Titel,
+    URL und Snippet zusammen; zwei getrennte MCP-Aufrufe (Text + JSON) waren
+    unterschiedlich sortiert und haben Titel falschen URLs zugeordnet."""
+    if not os.path.exists(DONSETCH_BIN):
+        raise EngineDown("nicht installiert")
     qq = q + "".join(f" site:{d}" for d in o.site[:1])
-    args = {"query": qq, "max_results": min(o.n, 12),
-            "intent": "news" if o.news else "auto"}
-    text = _mcporter("donsetch.web_search", args, "text")
+    cmd = [DONSETCH_BIN, "search", "--json", "-q", "--max-results", str(min(o.n, 12)),
+           "--intent", "news" if o.news else "auto", qq]
+    env = dict(os.environ, DONSETCH_NO_UPDATE_CHECK="1")
     try:
-        urls = {r["rank"]: r["url"] for r in
-                json.loads(_mcporter("donsetch.web_search", args, "json"))["results"]}
-    except (json.JSONDecodeError, KeyError) as e:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+        results = json.loads(p.stdout)["meta"]["results"]
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, TypeError) as e:
         raise EngineDown(type(e).__name__)
-    hits, lines = [], text.splitlines()
-    for i, line in enumerate(lines):
-        m = re.match(r"^(\d+)\. \S+ · (.*) : \S+ · \d+ index famil", line)
-        if m and int(m.group(1)) in urls:
-            snip = lines[i + 1].strip() if i + 1 < len(lines) else ""
-            hits.append(hit(m.group(2), urls[int(m.group(1))], snip, "", "donsetch"))
-    return hits
+    return [hit(r.get("title", ""), r["url"], r.get("snippet", ""), "", "donsetch")
+            for r in results if r.get("url")]
 
 
 def s_jina(q, o, keys):
@@ -355,6 +346,8 @@ def status(keys):
         need = {"tavily": "TAVILY_API_KEY", "exa-api": "EXA_API_KEY",
                 "serper": "SERPER_API_KEY", "jina": "JINA_API_KEY"}.get(name)
         ok = "keyless (mcporter)" if not need else ("Key da" if need in keys else "kein Key")
+        if name == "donsetch":
+            ok = "keyless (binary)" if os.path.exists(DONSETCH_BIN) else "nicht installiert"
         print(f"{name:8} {ok}")
 
 
